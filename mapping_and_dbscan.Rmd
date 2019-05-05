@@ -6,8 +6,13 @@ output: github_document
 library(data.table)
 library(dplyr)
 library(ggplot2)
+library(ggrepel)
 library(dbscan)
 ```
+
+## nspl file from geoportal
+
+Use all residential postcodes to check methods for user/customer data
 
 ```{r}
 nspl <- fread("NSPL_FEB_2019_UK.csv", showProgress = FALSE)
@@ -17,10 +22,13 @@ nspl <-
   filter(is.na(doterm),
          usertype == 0,
          substr(ctry, 1, 1) %in% c("E", "W")) %>%
-  select(pcds, ctry, oseast1m, osnrth1m, lat, long)
+  select(pcds, ctry, oseast1m, osnrth1m, lat, long) %>%
+  mutate(pcd_out = sub("[0-9]+", "", sub("\\s.+", "", pcds)))
 ```
 
-```{r pcd_map}
+Simple map of a sample of postcodes
+
+```{r pcd_map, fig.width=6, fig.height=7}
 ggplot(data = nspl[sample(nrow(nspl), 100000), ],
        aes(x = oseast1m, y = osnrth1m)) +
   coord_fixed() +
@@ -30,4 +38,67 @@ ggplot(data = nspl[sample(nrow(nspl), 100000), ],
         axis.text.y = element_blank()) +
   labs(x = NULL, y = NULL)
 ```
+
+## clustering via dbscan 
+
+Can explore sensitivity to eps (distance)
+
+```{r}
+dbs <- dbscan(as.matrix(nspl[c("oseast1m", "osnrth1m")]),
+              eps = 500, minPts = 10)
+```
+
+```{r}
+nspl <- mutate(nspl, cluster = dbs$cluster)
+```
+
+Summary of clusters including majority postcode area
+
+```{r}
+(cluster_summary <-
+  nspl %>%
+  group_by(cluster) %>%
+  filter(cluster > 0) %>%
+  summarise(pcd_out = head(names(sort(-table(pcd_out))), 1),
+            n = n(),
+            oseast1m = mean(oseast1m),
+            osnrth1m = mean(osnrth1m)) %>%
+  arrange(desc(n)))
+```
+
+Map largest clusters by population
+
+```{r cluster_map, fig.width=6, fig.height=7}
+clust_n <- 25
+
+sample_cluster <-
+  nspl %>% 
+  filter(cluster %in% head(cluster_summary$cluster, clust_n)) %>%
+  sample_n(40000)
+
+sample_remain  <-
+  nspl %>% 
+  filter(cluster %in% head(cluster_summary$cluster, clust_n) == FALSE) %>%
+  sample_n(60000)
+  
+
+ggplot(sample_remain,
+       aes(x = oseast1m, y = osnrth1m)) +
+  coord_fixed() +
+  geom_point(colour = "grey", alpha = 0.01, size = 0.3) +
+  geom_point(data = sample_cluster,
+             aes(colour = as.factor(cluster)),
+             alpha = 0.01, size = 0.3) +
+  geom_label_repel(data = cluster_summary[1:clust_n, ],
+                   aes(label = pcd_out),
+                   size = 3, alpha = 0.3, direction = "x") +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        legend.position = "none") +
+  labs(x = NULL, y = NULL) 
+```
+
+
+
 
